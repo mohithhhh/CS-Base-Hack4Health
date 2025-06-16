@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from transformers import pipeline
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 import time
+import os
+from nltk import ngrams  # For multi-word symptom extraction
 
 # Streamlit app configuration
 st.set_page_config(page_title="SympAI", page_icon="🩺", layout="wide")
@@ -26,22 +27,22 @@ if "results" not in st.session_state:
 # SymptomChecker class for backend logic
 class SymptomChecker:
     def __init__(self):
-        # Initialize lightweight NLP model
-        try:
-            self.nlp = pipeline("ner", model="distilbert-base-uncased")
-            st.info("NLP model loaded successfully.")
-        except Exception as e:
-            st.error(f"Error loading NLP model: {e}. Using fallback.")
-            self.nlp = None
+        # Debug: Print current working directory
+        st.write(f"**Debug**: Current working directory: {os.getcwd()}")
         
-        # Load real dataset
+        # Load real dataset using absolute path
         try:
-            self.conditions_data = pd.read_csv("data/Symptom2Disease.csv")
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            dataset_path = os.path.join(script_dir, "data", "Symptom2Disease.csv")
+            st.write(f"**Debug**: Attempting to load dataset from: {dataset_path}")
+            if not os.path.exists(dataset_path):
+                raise FileNotFoundError(f"Dataset file not found at {dataset_path}")
+            self.conditions_data = pd.read_csv(dataset_path)
             self.conditions_data = self.conditions_data[["text", "label"]].rename(
                 columns={"text": "symptoms", "label": "condition"}
             )
             self.conditions_data["symptoms"] = self.conditions_data["symptoms"].str.lower().str.replace(
-                r"i have |i am |been |experiencing |feeling ", "", regex=True
+                r"i have |i am |been | experiencing |feeling ", "", regex=True
             )
             self.conditions_data["probability"] = 1.0 / len(self.conditions_data)
             st.info("Dataset loaded successfully.")
@@ -82,7 +83,6 @@ class SymptomChecker:
 
     def get_outbreak_data(self, location):
         """Mock API to simulate fetching outbreak data based on location"""
-        # Simulate different risk levels based on location (for demo purposes)
         location_lower = location.lower()
         if not location:
             return "No location provided: Risk unknown"
@@ -118,19 +118,46 @@ class SymptomChecker:
             score += 0.05 * len(conditions.split(","))
         return min(score, 1.0)
 
+    def extract_symptoms(self, symptoms):
+        """Custom symptom extraction using n-grams"""
+        # Expanded stop words to filter out non-symptom words
+        stop_words = {
+            "i", "have", "a", "and", "the", "with", "in", "on", "at", "of", "to", "for",
+            "left", "right", "upper", "lower", "side", "my", "been", "experiencing", "feeling"
+        }
+        
+        # Convert to lowercase and split into words
+        words = symptoms.lower().split()
+        words = [word for word in words if word not in stop_words]
+        
+        # Generate unigrams and bigrams
+        unigrams = words
+        bigrams = [" ".join(gram) for gram in ngrams(words, 2)]
+        
+        # Combine unigrams and bigrams
+        symptoms_extracted = unigrams + bigrams
+        
+        # Filter for known symptoms by checking against dataset vocabulary
+        known_symptoms = set()
+        for symptom_str in self.conditions_data["symptoms"]:
+            for s in symptom_str.split():
+                known_symptoms.add(s)
+            for bigram in ngrams(symptom_str.split(), 2):
+                known_symptoms.add(" ".join(bigram))
+        
+        # Keep only symptoms that match known patterns
+        symptoms_extracted = [s for s in symptoms_extracted if s in known_symptoms]
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        symptoms_extracted = [s for s in symptoms_extracted if not (s in seen or seen.add(s))]
+        
+        return symptoms_extracted if symptoms_extracted else words
+
     def analyze_symptoms(self, symptoms, age, gender, location, conditions, lifestyle):
         """Analyze symptoms and return results"""
-        # Extract symptoms using NLP or fallback
-        symptoms_extracted = []
-        if self.nlp:
-            try:
-                entities = self.nlp(symptoms)
-                symptoms_extracted = [entity["word"] for entity in entities if entity["entity"].startswith("B-")]
-                st.write(f"**Debug**: Extracted entities: {entities}")
-            except Exception as e:
-                st.warning(f"Error extracting symptoms: {e}. Using raw input.")
-        if not symptoms_extracted:
-            symptoms_extracted = [word for word in symptoms.lower().split() if word not in {"i", "have", "a", "and", "the", "with"}]
+        # Extract symptoms using custom method
+        symptoms_extracted = self.extract_symptoms(symptoms)
         symptoms_str = " ".join(symptoms_extracted)
         st.write(f"**Debug**: Processed symptoms: {symptoms_str}")
 
@@ -150,10 +177,8 @@ class SymptomChecker:
                 for cond, prob in zip(self.conditions_data["condition"], self.conditions_data["probability"])
             ]
 
-        # Fetch mock outbreak data
         outbreak_data = self.get_outbreak_data(location)
 
-        # Generate results
         results = {
             "conditions": sorted(condition_probs, key=lambda x: x["probability"], reverse=True)[:3],
             "red_flags": self.check_red_flags(symptoms),
@@ -193,48 +218,38 @@ if st.button("Analyze Symptoms", key="analyze"):
         st.error("Model not initialized. Please check setup.")
     else:
         with st.spinner("Processing your symptoms..."):
-            time.sleep(1)  # Simulate processing for demo effect
+            time.sleep(1)
             st.session_state.results = model.analyze_symptoms(user_input, age, gender, location, conditions, lifestyle)
 
-        # Display results
         st.subheader("Analysis Results")
         
-        # Extracted Symptoms
         if st.session_state.results["extracted_symptoms"]:
             st.write("**Extracted Symptoms**: " + ", ".join(st.session_state.results["extracted_symptoms"]))
         else:
             st.write("**Extracted Symptoms**: None (using raw input)")
         
-        # Possible Conditions
         st.subheader("Possible Conditions")
         for condition in st.session_state.results["conditions"]:
             st.write(f"{condition['name']}: {condition['probability']*100:.1f}%")
 
-        # Red Flag Alerts
         if st.session_state.results["red_flags"]:
             st.error("🚨 **Red Flag Alerts**: " + ", ".join(st.session_state.results["red_flags"]))
         
-        # Risk Score
         st.subheader("Personalized Risk Score")
         st.write(f"Your risk score: {st.session_state.results['risk_score']*100:.1f}% (based on age, lifestyle, and conditions)")
         
-        # Outbreak Risk
         st.subheader("Outbreak Risk")
         st.write(f"{st.session_state.results['outbreak_data']}")
         
-        # Recommendations
         st.subheader("Recommendations")
         st.write(", ".join(st.session_state.results["recommendations"]))
         
-        # Teleconsultation
         st.subheader("Next Steps")
         st.markdown(f"[Book a Teleconsultation]({st.session_state.results['teleconsult']})")
 
-        # Mental Health Prompt
         if any(word in user_input.lower() for word in ["anxiety", "stress", "depressed"]):
             st.warning("💡 **Mental Health Note**: You mentioned symptoms related to mental health. Consider reaching out to a professional.")
 
-        # Bar chart for condition probabilities
         st.subheader("Condition Probabilities")
         chart_data = pd.DataFrame(
             data=[condition["probability"] * 100 for condition in st.session_state.results["conditions"]],
@@ -261,4 +276,4 @@ if st.button("Export Results", key="export"):
 
 # Footer
 st.markdown("---")
-st.markdown("**SympAI** - Built for Hackathon Success | Powered by AI and Streamlit | June 14, 2025")
+st.markdown("**SympAI** - Built for Hackathon Success | Powered by AI and Streamlit | June 16, 2025")
