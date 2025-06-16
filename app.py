@@ -290,7 +290,17 @@ if st.button("Export Results", key="export"):
             st.success("Results exported to sympai_results.csv")
         except Exception as e:
             st.error(f"Error exporting results: {e}")
-
+import tempfile
+with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+    results_df.to_csv(tmp_file.name, index=False)
+    with open(tmp_file.name, "rb") as file:
+        st.download_button(
+            label="Download sympai_results.csv",
+            data=file,
+            file_name="sympai_results.csv",
+            mime="text/csv"
+        )
+        
 # Footer
 st.markdown("---")
 st.markdown("**SympAI** - Built for Hackathon Success | Powered by AI and Streamlit | June 16, 2025")
