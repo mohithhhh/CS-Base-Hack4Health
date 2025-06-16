@@ -269,7 +269,24 @@ if st.button("Export Results", key="export"):
             results_df["red_flags"] = ", ".join(st.session_state.results["red_flags"])
             results_df["recommendations"] = ", ".join(st.session_state.results["recommendations"])
             results_df["outbreak_data"] = st.session_state.results["outbreak_data"]
+            
+            # Save the file
             results_df.to_csv("sympai_results.csv", index=False)
+            
+            # Debug: Confirm the file exists
+            if os.path.exists("sympai_results.csv"):
+                st.write("**Debug**: File successfully saved at sympai_results.csv")
+            else:
+                st.write("**Debug**: File save failed - path issue detected")
+            
+            # Provide a download button for Streamlit Cloud
+            with open("sympai_results.csv", "rb") as file:
+                st.download_button(
+                    label="Download sympai_results.csv",
+                    data=file,
+                    file_name="sympai_results.csv",
+                    mime="text/csv"
+                )
             st.success("Results exported to sympai_results.csv")
         except Exception as e:
             st.error(f"Error exporting results: {e}")
